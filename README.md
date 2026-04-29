@@ -194,6 +194,10 @@ dmsw new rule1 -k 30s space o  # 30秒未按空格则关机
 - 守护进程通过 Unix Socket 通信 (`/tmp/dmsw-<uid>.sock`)
 - PID 文件存储在 `/tmp/dmsw-<uid>.pid`
 
+## 常见问题
+
+-
+
 ## 许可证
 
 MIT License
