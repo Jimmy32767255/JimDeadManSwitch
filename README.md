@@ -196,8 +196,8 @@ dmsw new rule1 -k 30s space o  # 30秒未按空格则关机
 
 ## 常见问题
 
-Q：此项目是否支持 Windows 操作系统？
-A：目前并不支持 Windows 操作系统，但是我们正计划增加对 Windows 操作系统平台的支持。
+- Q：此项目是否支持 Windows 操作系统？
+- A：目前并不支持 Windows 操作系统，但是我们正计划增加对 Windows 操作系统平台的支持。
 
 ## 许可证
 
