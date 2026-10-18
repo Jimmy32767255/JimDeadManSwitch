@@ -133,6 +133,66 @@ pub fn pid_file() -> String {
     format!("/tmp/dmsw-{}.pid", uid())
 }
 
+/// 上一次运行守护进程时记录的内核 boot ID。
+pub fn boot_id_file() -> PathBuf {
+    config_dir().join("boot-id")
+}
+
+/// 当前内核的 boot ID；无法读取时返回 `None`。
+pub fn current_boot_id() -> Option<String> {
+    fs::read_to_string("/proc/sys/kernel/random/boot_id")
+        .ok()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+}
+
+/// 读取上次记录的 boot ID。
+pub fn saved_boot_id() -> Option<String> {
+    fs::read_to_string(boot_id_file())
+        .ok()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+}
+
+/// 记录当前 boot ID（权限 0600，原子写入）。
+pub fn save_boot_id(id: &str) -> Result<(), String> {
+    let dir = config_dir();
+    fs::create_dir_all(&dir).map_err(|err| format!("无法创建配置目录 {}: {err}", dir.display()))?;
+    let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+
+    let path = boot_id_file();
+    let tmp = dir.join(format!("boot-id.{}.tmp", std::process::id()));
+    let result = (|| -> Result<(), String> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|err| format!("无法写入临时 boot ID 文件 {}: {err}", tmp.display()))?;
+        file.write_all(id.as_bytes())
+            .and_then(|()| file.write_all(b"\n"))
+            .and_then(|()| file.sync_all())
+            .map_err(|err| format!("写入 boot ID 文件 {} 失败: {err}", tmp.display()))?;
+        fs::rename(&tmp, &path)
+            .map_err(|err| format!("无法更新 boot ID 文件 {}: {err}", path.display()))?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+/// 是否应因“系统重新启动”而解除预位。
+///
+/// 只有配置处于预位、能读到当前 boot ID、且与上次记录的 boot ID 不同（包括
+/// 没有记录）时才返回真。同一 boot 内的守护进程重启不会解除预位。
+pub fn should_disarm_on_boot(armed: bool, current: Option<&str>, previous: Option<&str>) -> bool {
+    armed && current.is_some() && previous != current
+}
+
 /// 读取配置；文件不存在时返回默认配置。
 pub fn load_config() -> Result<Config, String> {
     let path = config_file();
@@ -425,5 +485,14 @@ mod tests {
         assert!(!config.armed);
         assert!(config.rules.is_empty());
         assert!(config.bindings.is_empty());
+    }
+
+    #[test]
+    fn boot_disarm_only_when_armed_and_boot_changed() {
+        assert!(should_disarm_on_boot(true, Some("new"), Some("old")));
+        assert!(should_disarm_on_boot(true, Some("new"), None));
+        assert!(!should_disarm_on_boot(true, Some("same"), Some("same")));
+        assert!(!should_disarm_on_boot(false, Some("new"), Some("old")));
+        assert!(!should_disarm_on_boot(true, None, Some("old")));
     }
 }

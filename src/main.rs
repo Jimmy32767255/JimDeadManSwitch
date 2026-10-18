@@ -201,15 +201,26 @@ fn cmd_del(args: &[String]) -> Result<(), String> {
 fn cmd_arm() -> Result<(), String> {
     let mut config = config::load_config()?;
     if config.armed {
+        record_boot_id_best_effort();
         println!("系统已经在预位状态。");
         return Ok(());
     }
 
     config.armed = true;
     config::save_config(&config)?;
+    record_boot_id_best_effort();
     println!("系统已预位。");
     notify_command("arm");
     Ok(())
+}
+
+/// 记录当前 boot ID，供守护进程启动时判断是否发生了系统重启。
+fn record_boot_id_best_effort() {
+    if let Some(boot_id) = config::current_boot_id() {
+        if let Err(err) = config::save_boot_id(&boot_id) {
+            eprintln!("提示：无法记录当前 boot ID：{err}");
+        }
+    }
 }
 
 fn cmd_unarm() -> Result<(), String> {

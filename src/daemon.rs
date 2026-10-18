@@ -652,7 +652,38 @@ pub fn run(ready_fd: RawFd) -> Result<(), String> {
     let _ = fs::create_dir_all(config::config_dir());
     let _ = fs::set_permissions(config::config_dir(), fs::Permissions::from_mode(0o700));
 
-    let config = config::load_config()?;
+    let mut config = config::load_config()?;
+
+    // 操作系统重新启动后自动解除预位，避免“触发关机 -> 重启 -> 再次触发”
+    // 的循环。同一 boot 内 systemd 重启守护进程不会解除预位。
+    let current_boot = config::current_boot_id();
+    let saved_boot = config::saved_boot_id();
+    let mut boot_disarmed = false;
+    let mut disarm_saved = false;
+    if config::should_disarm_on_boot(config.armed, current_boot.as_deref(), saved_boot.as_deref()) {
+        config.armed = false;
+        boot_disarmed = true;
+        match config::save_config(&config) {
+            Ok(()) => {
+                disarm_saved = true;
+                log_line("检测到系统启动，已自动解除预位。");
+            }
+            Err(err) => log_line(&format!(
+                "检测到系统启动，但保存解除预位状态失败: {err}；本次运行保持未预位。"
+            )),
+        }
+    }
+    if let Some(boot_id) = current_boot.as_deref() {
+        // 配置保存失败时不记录 boot ID，让下次启动继续尝试解除预位。
+        if !boot_disarmed || disarm_saved {
+            if let Err(err) = config::save_boot_id(boot_id) {
+                log_line(&format!("无法记录当前 boot ID: {err}"));
+            }
+        }
+    } else {
+        log_line("无法读取内核 boot ID，跳过启动自动解除预位检查。");
+    }
+
     let daemon = Daemon::new(config);
 
     let socket_path = config::socket_path();
