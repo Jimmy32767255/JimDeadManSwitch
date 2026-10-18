@@ -93,6 +93,62 @@ dmsw unarm
 dmsw daemon --stop
 ```
 
+## systemd 集成
+
+仓库提供两个单元文件，二者只能启用一个（它们共用同一份配置、socket 与 PID 文件）：
+
+| 单元 | 安装位置 | 适用场景 |
+|------|----------|----------|
+| [`dmsw.service`](systemd/dmsw.service) | `/usr/lib/systemd/user/` | 当前登录用户 |
+| [`dmsw@.service`](systemd/dmsw@.service) | `/usr/lib/systemd/system/` | 开机即运行，以指定用户身份运行（无需登录） |
+
+AUR 包会自动安装这两个文件；从源码安装时可手动复制到对应目录并运行
+`systemctl daemon-reload`（用户级还需 `systemctl --user daemon-reload`）。单元中的
+二进制路径按 AUR 包的 `/usr/bin/dmsw` 编写；若按前面的源码方式安装到
+`/usr/local/bin`，请先把单元里的 `ExecStart` / `ExecStop` 改为对应路径。
+
+### 用户级（推荐桌面用户）
+
+```bash
+systemctl --user enable --now dmsw.service
+systemctl --user status dmsw.service
+```
+
+要求当前用户属于 `input` 组（见[权限设置](#权限设置)）。若要在未登录时也保持运行：
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+### 系统级（开机运行，以指定用户身份）
+
+```bash
+sudo systemctl enable --now dmsw@$(id -u).service
+```
+
+实例名是目标用户的**数字 UID**（`$(id -u)`），例如 `dmsw@1000.service`。守护进程
+按 UID 命名 `/tmp/dmsw-<uid>.pid`，而系统级单元里的 `%U` 始终是 0，因此模板
+使用 `%i` 作为 UID。
+
+该单元通过 `SupplementaryGroups=input` 授予键盘访问权限，因此不要求用户加入
+`input` 组；规则命令仍以该用户身份执行。
+
+### 停止与日志
+
+```bash
+systemctl --user stop dmsw.service          # 用户级
+sudo systemctl stop dmsw@$(id -u).service      # 系统级
+
+journalctl --user -u dmsw.service -f        # 用户级启动/停止信息
+sudo journalctl -u dmsw@$(id -u).service -f    # 系统级启动/停止信息
+tail -f ~/.config/dmsw/dmsw.log             # 规则触发与运行日志
+```
+
+单元只负责启动守护进程，不会改变配置中的预位状态。首次使用请先运行 `dmsw arm`；
+`arm` / `unarm` 会保存 `armed`，因此重启后守护进程会恢复之前的预位状态。
+`Type=forking` 通过 `/tmp/dmsw-<uid>.pid` 跟踪守护进程。不要同时启用两个
+单元，也不要在 systemd 管理时再手动启动第二个实例。
+
 ## 干运行模式
 
 干运行用于安全地验证规则和绑定是否会按预期触发：规则照常评估，但命令只写入
@@ -300,6 +356,7 @@ Rust 版保持了原有 CLI、配置结构、socket 协议和预设命令，同�
 - **新增干运行模式**：`--dry-run` 可让守护进程或单次 `trigger` 只报告将要执行的
   命令，用于安全测试规则。
 - **参数兼容**：`bind` 同时接受“动作在前”和“按键组合在前”两种写法。
+- **systemd 单元**：提供用户级单元与系统级模板单元，便于开机自启。
 
 原 Python 实现保留在 git 历史中。
 

@@ -1,0 +1,17 @@
+[Unit]
+Description=dmsw dead man's switch
+Documentation=https://github.com/Jimmy32767255/JimDeadManSwitch
+# 用户级单元：用 systemctl --user 管理。
+# 需要当前用户属于 input 组，才能读取 /dev/input/event*。
+
+[Service]
+Type=forking
+PIDFile=/tmp/dmsw-%U.pid
+UMask=0077
+ExecStart=/usr/bin/dmsw daemon --start
+ExecStop=/usr/bin/dmsw daemon --stop
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

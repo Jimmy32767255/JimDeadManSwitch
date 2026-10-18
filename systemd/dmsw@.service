@@ -1,0 +1,22 @@
+[Unit]
+Description=dmsw dead man's switch for UID %i
+Documentation=https://github.com/Jimmy32767255/JimDeadManSwitch
+After=local-fs.target
+# 实例名必须是目标用户的数字 UID，例如 dmsw@1000.service。
+# 守护进程按 UID 生成 /tmp/dmsw-<uid>.pid，而系统实例中的 %U 始终是 0，
+# 因此这里使用 %i 而不是 %U。
+
+[Service]
+Type=forking
+User=%i
+SupplementaryGroups=input
+WorkingDirectory=~
+PIDFile=/tmp/dmsw-%i.pid
+UMask=0077
+ExecStart=/usr/bin/dmsw daemon --start
+ExecStop=/usr/bin/dmsw daemon --stop
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
