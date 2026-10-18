@@ -288,7 +288,7 @@ pub fn parse_interval(text: &str) -> Result<f64, String> {
     Ok(seconds)
 }
 
-/// 把用户输入的按键名称或按键 ID 解析为 Linux 键码。
+/// 把用户输入的按键名称或数字键码解析为 Linux 键码。
 ///
 /// 支持 `space`、`leftctrl`、`KEY_A`、`ctrl` 等名称；当 `key_id` 为真时
 /// 只接受 0-65535 的整数。
@@ -301,7 +301,7 @@ pub fn resolve_key(input: &str, key_id: bool) -> Result<u16, String> {
     if key_id {
         return input
             .parse::<u16>()
-            .map_err(|_| format!("无效的按键 ID '{input}'，必须是 0-65535 的整数"));
+            .map_err(|_| format!("无效的按键码 '{input}'，必须是 0-65535 的整数"));
     }
 
     let upper = input.to_ascii_uppercase();
@@ -342,7 +342,7 @@ pub fn resolve_key(input: &str, key_id: bool) -> Result<u16, String> {
     }
 
     Err(format!(
-        "无法解析按键 '{input}'，请使用按键名称（如 space、leftctrl、KEY_A）或按键 ID"
+        "无法解析按键 '{input}'，请使用按键名称（如 space、leftctrl、KEY_A）或按键码"
     ))
 }
 

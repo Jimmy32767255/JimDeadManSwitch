@@ -214,7 +214,7 @@ dmsw list
 ```
 
 规则按名称排序。首行显示当前预位状态和规则数量；没有规则时会提示用 `dmsw new`
-创建。使用 `--id` 创建的规则会把数字键码显示为 `#57`。
+创建。使用 `--key-code` 创建的规则会把数字键码显示为 `#57`。
 
 ### 规则类型
 
@@ -224,8 +224,8 @@ dmsw list
 # 30 秒内未按空格键则执行命令
 dmsw new rule1 -k 30s space "rm -rf /home/$USER/.safebox"
 
-# 使用数字键码（--id）
-dmsw new rule2 -k 5m --id 57 "systemctl poweroff"
+# 使用数字键码（--key-code）
+dmsw new rule2 -k 5m --key-code 57 "systemctl poweroff"
 ```
 
 时间单位支持 `s`（秒）、`m`（分）、`h`（小时）、`d`（天），也可以直接写秒数。
@@ -238,7 +238,7 @@ dmsw new rule2 -k 5m --id 57 "systemctl poweroff"
 dmsw new rule3 -K leftctrl "rm -rf /home/$USER/.safebox"
 
 # 使用数字键码
-dmsw new rule4 -K --id 29 "systemctl poweroff"
+dmsw new rule4 -K --key-code 29 "systemctl poweroff"
 ```
 
 注意：该规则在**释放**按键时触发，用于“松开按键 = 出事”的场景。
@@ -306,7 +306,7 @@ dmsw bind -c unarm
 - 去掉 `KEY_` 前缀的名称：`a`、`space`、`leftctrl`、`f1`、`5`
 - 常用别名：`ctrl`、`alt`、`shift`、`super`/`win`、`enter`、`esc`、`del`、
   `ins`、`pgup`、`pgdn` 等（不区分大小写）
-- `--id` 模式下直接使用 0–65535 的 Linux 键码
+- `--key-code` 模式下直接使用 0–65535 的 Linux 键码
 
 ## 配置文件
 

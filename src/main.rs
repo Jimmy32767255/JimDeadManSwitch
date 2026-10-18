@@ -29,8 +29,10 @@ const HELP: &str = "\
     daemon  控制守护进程 (--start 启动, --stop 停止)
 
 规则类型:
-    -k <间隔> [--id] <按键> <命令>   按键超时：间隔内未按该键则执行命令
-    -K [--id] <按键> <命令>          按键保持：释放该键时执行命令
+    -k <间隔> [--key-code] <按键> <命令>
+                                     按键超时：间隔内未按该键则执行命令
+    -K [--key-code] <按键> <命令>
+                                     按键保持：释放该键时执行命令
     -p <进程名> <命令>               进程监控：进程不存在时执行命令
 
 选项:
@@ -38,7 +40,7 @@ const HELP: &str = "\
                可用于 daemon --start 或 trigger
     -c, --capture  bind：监听键盘，捕获要绑定的组合键
 
-按键名: space、leftctrl、KEY_A、a 等；加 --id 后使用数字键码。
+按键名: space、leftctrl、KEY_A、a 等；加 --key-code 后使用数字键码。
 bind 的 -c/--capture 会监听键盘，把实际按下的组合键保存为绑定。";
 
 fn main() {
@@ -103,46 +105,46 @@ fn cmd_new(args: &[String]) -> Result<(), String> {
             let mut index = 2;
             let interval_text = args
                 .get(index)
-                .ok_or("语法: dmsw new <name> -k <时间间隔> [--id] <按键> <命令>")?;
+                .ok_or("语法: dmsw new <name> -k <时间间隔> [--key-code] <按键> <命令>")?;
             let interval = config::parse_interval(interval_text)?;
             index += 1;
 
-            let use_id = args.get(index).map(String::as_str) == Some("--id");
-            if use_id {
+            let use_key_code = args.get(index).map(String::as_str) == Some("--key-code");
+            if use_key_code {
                 index += 1;
             }
 
             let key = args
                 .get(index)
-                .ok_or("语法: dmsw new <name> -k <时间间隔> [--id] <按键> <命令>")?;
-            config::resolve_key(key, use_id)?;
+                .ok_or("语法: dmsw new <name> -k <时间间隔> [--key-code] <按键> <命令>")?;
+            config::resolve_key(key, use_key_code)?;
             index += 1;
 
             let command = join_command(&args[index..])?;
             config::Rule::KeyTimeout {
                 interval,
                 key: key.clone(),
-                key_id: use_id,
+                key_id: use_key_code,
                 command,
             }
         }
         "-K" => {
             let mut index = 2;
-            let use_id = args.get(index).map(String::as_str) == Some("--id");
-            if use_id {
+            let use_key_code = args.get(index).map(String::as_str) == Some("--key-code");
+            if use_key_code {
                 index += 1;
             }
 
             let key = args
                 .get(index)
-                .ok_or("语法: dmsw new <name> -K [--id] <按键> <命令>")?;
-            config::resolve_key(key, use_id)?;
+                .ok_or("语法: dmsw new <name> -K [--key-code] <按键> <命令>")?;
+            config::resolve_key(key, use_key_code)?;
             index += 1;
 
             let command = join_command(&args[index..])?;
             config::Rule::KeyHold {
                 key: key.clone(),
-                key_id: use_id,
+                key_id: use_key_code,
                 command,
             }
         }
