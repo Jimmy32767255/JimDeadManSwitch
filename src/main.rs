@@ -21,6 +21,7 @@ const HELP: &str = "\
 子命令:
     new     创建一条规则
     del     删除一条规则
+    list    列出所有规则
     arm     预位系统（激活所有规则监控）
     unarm   解除预位
     bind    绑定一组按键到规则或预位切换
@@ -75,6 +76,7 @@ fn main() {
         }
         "new" => cmd_new(&args[1..]),
         "del" => cmd_del(&args[1..]),
+        "list" => cmd_list(&args[1..]),
         "arm" => cmd_arm(),
         "unarm" => cmd_unarm(),
         "bind" => cmd_bind(&args[1..]),
@@ -187,6 +189,60 @@ fn cmd_del(args: &[String]) -> Result<(), String> {
         println!("规则 '{name}' 不存在。");
     }
     Ok(())
+}
+
+fn cmd_list(args: &[String]) -> Result<(), String> {
+    if !args.is_empty() {
+        return Err("用法: dmsw list".to_string());
+    }
+
+    let config = config::load_config()?;
+    let status = if config.armed {
+        "已预位"
+    } else {
+        "未预位"
+    };
+    if config.rules.is_empty() {
+        println!("系统{status}，当前没有规则。使用 dmsw new 创建规则。");
+        return Ok(());
+    }
+
+    println!("系统{status}，共 {} 条规则：", config.rules.len());
+    for (name, rule) in &config.rules {
+        println!("  {name}  {}", describe_rule(rule));
+    }
+    Ok(())
+}
+
+fn describe_rule(rule: &config::Rule) -> String {
+    match rule {
+        config::Rule::KeyTimeout {
+            interval,
+            key,
+            key_id,
+            command,
+        } => format!(
+            "[按键超时] {interval}s 内未按 {} -> {command}",
+            key_label(key, *key_id)
+        ),
+        config::Rule::KeyHold {
+            key,
+            key_id,
+            command,
+        } => format!("[按键保持] 释放 {} -> {command}", key_label(key, *key_id)),
+        config::Rule::Process {
+            process_name,
+            command,
+        } => format!("[进程监控] 进程 {process_name} 不存在 -> {command}"),
+    }
+}
+
+fn key_label(key: &str, key_id: bool) -> String {
+    if key_id {
+        format!("#{key}")
+    } else {
+        key.to_string()
+    }
 }
 
 fn cmd_arm() -> Result<(), String> {
@@ -532,5 +588,44 @@ fn notify_command(command: &str) {
             // 配置已经保存，守护进程下次启动时会读取；这里只提示而不失败。
             eprintln!("提示：{err}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Rule;
+
+    #[test]
+    fn describes_each_rule_kind() {
+        let timeout = Rule::KeyTimeout {
+            interval: 30.0,
+            key: "space".to_string(),
+            key_id: false,
+            command: "systemctl poweroff".to_string(),
+        };
+        assert_eq!(
+            describe_rule(&timeout),
+            "[按键超时] 30s 内未按 space -> systemctl poweroff"
+        );
+
+        let hold = Rule::KeyHold {
+            key: "29".to_string(),
+            key_id: true,
+            command: "systemctl reboot".to_string(),
+        };
+        assert_eq!(
+            describe_rule(&hold),
+            "[按键保持] 释放 #29 -> systemctl reboot"
+        );
+
+        let process = Rule::Process {
+            process_name: "firefox".to_string(),
+            command: "systemctl poweroff".to_string(),
+        };
+        assert_eq!(
+            describe_rule(&process),
+            "[进程监控] 进程 firefox 不存在 -> systemctl poweroff"
+        );
     }
 }

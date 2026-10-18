@@ -8,6 +8,7 @@ GNU/Linux 平台的死手系统，用于监控特定条件（按键超时、按�
 - **按键超时规则 (`-k`)**：在指定时间内未按下特定按键则触发命令
 - **按键保持规则 (`-K`)**：释放特定按键时触发命令
 - **进程监控规则 (`-p`)**：指定进程不存在时触发命令
+- **规则列表 (`list`)**：按名称列出全部规则、类型、条件与命令
 - **按键绑定**：用组合键预位、解除预位或触发某条规则
 - **组合键捕获**：`bind -c/--capture` 直接监听键盘，把实际按下的组合键保存为绑定
 - **守护进程模式**：后台运行并监控所有规则
@@ -54,7 +55,7 @@ makepkg -si
 
 1. 更新 [Cargo.toml](Cargo.toml) 与 [aur/PKGBUILD](aur/PKGBUILD) 中的版本号；
 2. 提交并推送所有改动（tag 必须包含 `LICENSE`，否则打包会失败）；
-3. `git tag -a v2.0.0 -m "dmsw 2.0.0" && git push origin v2.0.0`；
+3. `git tag -a v2.1.0 -m "dmsw 2.1.0" && git push origin v2.1.0`；
 4. `cd aur && makepkg --printsrcinfo > .SRCINFO`。
 
 提交 AUR 时，将 `aur/` 下的 `PKGBUILD` 与 `.SRCINFO` 推送至 AUR 的 `dmsw` 仓库即可。
@@ -79,17 +80,20 @@ sudo dmsw daemon --start
 # 1. 创建规则：30 秒内未按空格键则关机
 dmsw new rule1 -k 30s space "systemctl poweroff"
 
-# 2. 启动守护进程
+# 2. 查看已创建的规则
+dmsw list
+
+# 3. 启动守护进程
 dmsw daemon --start
 
-# 3. 预位系统（规则开始生效）
+# 4. 预位系统（规则开始生效）
 dmsw arm
 
-# 4. 查看状态/日志
+# 5. 查看状态/日志
 dmsw -v
 tail -f ~/.config/dmsw/dmsw.log
 
-# 5. 解除预位并停止守护进程
+# 6. 解除预位并停止守护进程
 dmsw unarm
 dmsw daemon --stop
 ```
@@ -183,6 +187,7 @@ dmsw trigger rule1 --dry-run
 ```
 dmsw new <规则名> <-k|-K|-p> [参数...] <命令>
 dmsw del <规则名>
+dmsw list
 dmsw arm
 dmsw unarm
 dmsw bind <动作|规则名> <按键组合>
@@ -193,6 +198,23 @@ dmsw daemon --stop
 dmsw -v|--version
 dmsw -h|--help
 ```
+
+### 列出规则
+
+```bash
+dmsw list
+```
+
+输出示例：
+
+```
+系统未预位，共 2 条规则：
+  rule1  [按键超时] 30s 内未按 space -> systemctl poweroff
+  rule3  [进程监控] 进程 firefox 不存在 -> systemctl reboot
+```
+
+规则按名称排序。首行显示当前预位状态和规则数量；没有规则时会提示用 `dmsw new`
+创建。使用 `--id` 创建的规则会把数字键码显示为 `#57`。
 
 ### 规则类型
 

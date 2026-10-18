@@ -14,7 +14,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub const VERSION: &str = "2.0.0";
+pub const VERSION: &str = "2.1.0";
 
 /// 一条监控规则。
 #[derive(Debug, Clone, Serialize, Deserialize)]
