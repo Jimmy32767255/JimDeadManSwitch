@@ -37,6 +37,27 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
+### Arch Linux（AUR）
+
+[AUR 打包文件](aur/PKGBUILD) 位于 `aur/` 目录，对应的 [.SRCINFO](aur/.SRCINFO) 已生成。
+PKGBUILD 从 GitHub 的 `v$pkgver` 标签构建，因此构建前需要先推送对应标签。
+由于 `makepkg` 默认使用当前目录下的 `src/`，请在 `aur/` 子目录中执行，避免与
+Rust 源码目录冲突：
+
+```bash
+cd aur
+makepkg -si
+```
+
+发布新版本时：
+
+1. 更新 [Cargo.toml](Cargo.toml) 与 [aur/PKGBUILD](aur/PKGBUILD) 中的版本号；
+2. 提交并推送所有改动（tag 必须包含 `LICENSE`，否则打包会失败）；
+3. `git tag -a v1.1.0 -m "dmsw 1.1.0" && git push origin v1.1.0`；
+4. `cd aur && makepkg --printsrcinfo > .SRCINFO`。
+
+提交 AUR 时，将 `aur/` 下的 `PKGBUILD` 与 `.SRCINFO` 推送至 AUR 的 `dmsw` 仓库即可。
+
 ### 权限设置
 
 监控键盘需要读取输入设备：

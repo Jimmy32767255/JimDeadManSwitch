@@ -9,3 +9,8 @@
 /tmp/
 .vscode/
 .idea/
+
+# AUR 打包产物（makepkg 在 aur/ 下运行）
+/aur/src/
+/aur/pkg/
+/aur/*.pkg.tar.*
