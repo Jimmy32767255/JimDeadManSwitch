@@ -14,7 +14,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub const VERSION: &str = "1.1.0";
+pub const VERSION: &str = "1.2.0";
 
 /// 预定义命令缩写。
 pub const PRESET_COMMANDS: &[(&str, &str)] = &[
@@ -244,13 +244,18 @@ pub fn save_config(config: &Config) -> Result<(), String> {
 
 /// 向守护进程发送请求并等待响应。
 pub fn notify_daemon(request: &Request) -> Result<Response, String> {
+    notify_daemon_timeout(request, Duration::from_secs(2))
+}
+
+/// 与 [`notify_daemon`] 相同，但可自定义等待响应的超时（按键捕获需要较长时间）。
+pub fn notify_daemon_timeout(request: &Request, timeout: Duration) -> Result<Response, String> {
     let path = socket_path();
     let mut stream = UnixStream::connect(&path).map_err(|err| {
         format!("无法连接到守护进程（{path}）：{err}。请先执行 dmsw daemon --start 启动守护进程。")
     })?;
 
     stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
+        .set_read_timeout(Some(timeout))
         .and_then(|()| stream.set_write_timeout(Some(Duration::from_secs(2))))
         .map_err(|err| format!("无法设置 socket 超时: {err}"))?;
 
@@ -269,6 +274,11 @@ pub fn notify_daemon(request: &Request) -> Result<Response, String> {
     }
 
     serde_json::from_slice(&buf[..size]).map_err(|err| format!("守护进程响应无效: {err}"))
+}
+
+/// 探测守护进程是否在运行（socket 是否可连接）。
+pub fn daemon_available() -> bool {
+    UnixStream::connect(socket_path()).is_ok()
 }
 
 /// 解析 `30s`、`5m`、`1h`、`2d` 或纯秒数为秒数。

@@ -35,6 +35,7 @@ const HELP: &str = "\
 选项:
     --dry-run  干运行：规则照常评估，但命令只记录/显示，不真正执行
                可用于 daemon --start 或 trigger
+    -c, --capture  bind：监听键盘，捕获要绑定的组合键
 
 示例:
     dmsw new rule1 -k 30s space o
@@ -42,12 +43,15 @@ const HELP: &str = "\
     dmsw new rule3 -p firefox r
     dmsw bind ctrl+alt+x rule1
     dmsw bind ctrl+alt+u unarm
+    dmsw bind --capture rule1
+    dmsw bind -c unarm
     dmsw daemon --start --dry-run
     dmsw trigger rule1 --dry-run
     dmsw arm
 
 按键名: space、leftctrl、KEY_A、a 等；加 --id 后使用数字键码。
-预设命令: d、s、o、O、r、R、c（见 README）。";
+预设命令: d、s、o、O、r、R、c（见 README）。
+bind 的 -c/--capture 会监听键盘，把实际按下的组合键保存为绑定。";
 
 fn main() {
     let raw_args: Vec<String> = env::args().skip(1).collect();
@@ -238,28 +242,83 @@ fn cmd_unarm() -> Result<(), String> {
 }
 
 fn cmd_bind(args: &[String]) -> Result<(), String> {
-    if args.len() < 2 {
-        return Err("用法: dmsw bind <动作|规则名> <按键组合>\n\
-                    动作: arm, unarm, 或规则名\n\
-                    按键组合示例: a+b 或 ctrl+alt+x (使用 '+' 分隔)"
-            .to_string());
+    const USAGE: &str = "用法: dmsw bind <动作|规则名> <按键组合>\n\
+                         或:   dmsw bind [--capture|-c] <动作|规则名>\n\
+                         动作: arm, unarm, 或规则名\n\
+                         按键组合示例: a+b 或 ctrl+alt+x (使用 '+' 分隔)\n\
+                         选项: -c, --capture  监听键盘并捕获要绑定的组合键";
+
+    let mut capture = false;
+    let mut positional: Vec<&String> = Vec::new();
+    for arg in args {
+        match arg.as_str() {
+            "-c" | "--capture" => {
+                if capture {
+                    return Err(format!("--capture 只能指定一次。\n{USAGE}"));
+                }
+                capture = true;
+            }
+            _ => positional.push(arg),
+        }
+    }
+
+    if capture {
+        if positional.len() != 1 {
+            return Err(format!("--capture 需要且只需要一个动作或规则名。\n{USAGE}"));
+        }
+        let action_target = positional[0];
+        println!("请按下要绑定的组合键（按住修饰键，全部松开后结束）…");
+
+        let keys = if config::daemon_available() {
+            let request = Request::new("capture");
+            let response = config::notify_daemon_timeout(&request, Duration::from_secs(30))?;
+            if !response.is_ok() {
+                return Err(response
+                    .msg
+                    .unwrap_or_else(|| "守护进程未能捕获按键".to_string()));
+            }
+            response.keys
+        } else {
+            eprintln!("提示：未检测到运行中的守护进程，将直接监听键盘。");
+            let codes = crate::input::capture_keys(Duration::from_secs(15))?;
+            codes
+                .into_iter()
+                .map(|code| {
+                    crate::keycodes::canonical_name(code)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| code.to_string())
+                })
+                .collect()
+        };
+
+        if keys.is_empty() {
+            return Err("未捕获到任何按键，绑定未添加。".to_string());
+        }
+        return add_binding(keys, action_target);
+    }
+
+    if positional.len() != 2 {
+        return Err(USAGE.to_string());
     }
 
     // 兼容两种书写顺序：
     //   dmsw bind <动作|规则名> <按键组合>
     //   dmsw bind <按键组合> <动作|规则名>
-    let first_is_combo = config::parse_key_combination(&args[0]).is_ok();
-    let second_is_combo = config::parse_key_combination(&args[1]).is_ok();
+    let first_is_combo = config::parse_key_combination(positional[0]).is_ok();
+    let second_is_combo = config::parse_key_combination(positional[1]).is_ok();
     let (action_target, keys_str) = if first_is_combo && !second_is_combo {
-        (&args[1], &args[0])
+        (positional[1].as_str(), positional[0].as_str())
     } else {
-        (&args[0], &args[1])
+        (positional[0].as_str(), positional[1].as_str())
     };
 
     let key_list = config::parse_key_combination(keys_str)?;
+    add_binding(key_list, action_target)
+}
 
-    let (action, rule) = match action_target.as_str() {
-        "arm" | "unarm" => (action_target.clone(), None),
+fn add_binding(key_list: Vec<String>, action_target: &str) -> Result<(), String> {
+    let (action, rule) = match action_target {
+        "arm" | "unarm" => (action_target.to_string(), None),
         rule_name => ("trigger".to_string(), Some(rule_name.to_string())),
     };
 
@@ -270,12 +329,13 @@ fn cmd_bind(args: &[String]) -> Result<(), String> {
         }
     }
     config.bindings.push(config::Binding {
-        keys: key_list,
+        keys: key_list.clone(),
         action: action.clone(),
         rule: rule.clone(),
     });
     config::save_config(&config)?;
 
+    let keys_str = key_list.join("+");
     match &rule {
         Some(rule) => println!("绑定已添加: {keys_str} -> {action} {rule}"),
         None => println!("绑定已添加: {keys_str} -> {action}"),

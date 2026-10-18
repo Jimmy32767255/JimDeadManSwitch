@@ -2,6 +2,7 @@
 
 use crate::config::{self, Config, Rule};
 use crate::input;
+use crate::keycodes;
 use crate::protocol::{Request, Response};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{self, OpenOptions};
@@ -11,8 +12,8 @@ use std::os::unix::io::RawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -33,6 +34,8 @@ pub fn is_dry_run() -> bool {
 
 const MONITOR_INTERVAL: Duration = Duration::from_millis(500);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+/// 一次按键捕获最长等待时间。
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(20);
 
 extern "C" fn handle_signal(_signum: libc::c_int) {
     STOP.store(true, Ordering::SeqCst);
@@ -113,10 +116,23 @@ struct State {
     process_missing: HashMap<String, bool>,
     /// 按键码 -> key_hold 规则名。
     rule_hold: HashMap<u16, String>,
+    /// 正在捕获组合键；捕获期间暂停规则监控。
+    capturing: bool,
 }
 
 pub struct Daemon {
     state: Mutex<State>,
+    capture: Mutex<CaptureSession>,
+    capture_done: Condvar,
+    /// 同一时间只允许一个客户端捕获按键。
+    capture_serial: Mutex<()>,
+    /// 守护进程启动时打开的键盘数量；0 表示无可用键盘。
+    keyboards: AtomicUsize,
+}
+
+struct CaptureSession {
+    active: bool,
+    state: input::CaptureState,
 }
 
 impl Daemon {
@@ -129,9 +145,17 @@ impl Daemon {
             last_keypress: HashMap::new(),
             process_missing: HashMap::new(),
             rule_hold: HashMap::new(),
+            capturing: false,
         };
         let daemon = Arc::new(Daemon {
             state: Mutex::new(state),
+            capture: Mutex::new(CaptureSession {
+                active: false,
+                state: input::CaptureState::new(),
+            }),
+            capture_done: Condvar::new(),
+            capture_serial: Mutex::new(()),
+            keyboards: AtomicUsize::new(0),
         });
         daemon.rebuild();
         daemon
@@ -331,7 +355,8 @@ impl Daemon {
 
         {
             let mut state = self.state.lock().unwrap();
-            if !state.config.armed {
+            // 捕获按键期间暂停规则监控，避免测试绑定组合时误触发规则。
+            if !state.config.armed || state.capturing {
                 return;
             }
 
@@ -388,6 +413,103 @@ impl Daemon {
         }
     }
 
+    /// 把按键事件送入捕获会话；返回 true 表示事件已被捕获逻辑消费。
+    fn capture_event(&self, code: u16, pressed: bool) -> bool {
+        let mut capture = self.capture.lock().unwrap();
+        if !capture.active {
+            return false;
+        }
+
+        if pressed {
+            capture.state.press(code);
+        } else {
+            capture.state.release(code);
+        }
+
+        if capture.state.is_finished() {
+            capture.active = false;
+            self.capture_done.notify_all();
+        }
+        true
+    }
+
+    /// 等待用户按下一组组合键并返回规范化按键名。
+    fn handle_capture(&self) -> Response {
+        self.capture_with_timeout(CAPTURE_TIMEOUT)
+    }
+
+    fn capture_with_timeout(&self, timeout: Duration) -> Response {
+        if self.keyboards.load(Ordering::SeqCst) == 0 {
+            return Response::error(
+                "没有可用的键盘设备，请检查权限（通常需要加入 input 组）后重启守护进程。",
+            );
+        }
+
+        let _serial = match self.capture_serial.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return Response::error("已有按键捕获正在进行，请稍后再试。"),
+        };
+
+        // 清空按键状态，确保捕获从干净状态开始，并避免旧组合触发绑定。
+        {
+            let mut state = self.state.lock().unwrap();
+            state.capturing = true;
+            state.held.clear();
+            for binding in &mut state.bindings {
+                binding.fired = false;
+            }
+        }
+        {
+            let mut capture = self.capture.lock().unwrap();
+            capture.active = true;
+            capture.state = input::CaptureState::new();
+        }
+        log_line("开始捕获按键组合");
+
+        let deadline = Instant::now() + timeout;
+        let mut capture = self.capture.lock().unwrap();
+        while capture.active {
+            let now = Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let (guard, _) = self
+                .capture_done
+                .wait_timeout(capture, deadline.saturating_duration_since(now))
+                .unwrap();
+            capture = guard;
+        }
+        capture.active = false;
+        let codes = capture.state.peak_codes();
+        drop(capture);
+
+        // 捕获期间规则监控暂停，恢复后重新计时，避免超时立刻误触发。
+        {
+            let mut state = self.state.lock().unwrap();
+            state.capturing = false;
+            state.last_keypress.clear();
+        }
+
+        if codes.is_empty() {
+            log_line("按键捕获超时，未捕获到按键");
+            return Response::error(format!(
+                "等待按键超时（{} 秒），未捕获到任何按键。",
+                timeout.as_secs()
+            ));
+        }
+
+        let keys: Vec<String> = codes
+            .iter()
+            .map(|code| {
+                keycodes::canonical_name(*code)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| code.to_string())
+            })
+            .collect();
+        log_line(&format!("捕获到组合键: {}", keys.join("+")));
+        Response::ok_with_keys(keys)
+    }
+
     fn handle_request(&self, request: &Request) -> Response {
         match request.command.as_str() {
             "reload" => match config::load_config() {
@@ -416,6 +538,7 @@ impl Daemon {
                 }
                 Err(err) => Response::error(err),
             },
+            "capture" => self.handle_capture(),
             "trigger" => match &request.rule {
                 Some(rule) => match self.trigger(rule, request.dry_run) {
                     Ok(command) => {
@@ -704,6 +827,7 @@ pub fn run(ready_fd: RawFd) -> Result<(), String> {
     let _ = fs::set_permissions(&pid_path, fs::Permissions::from_mode(0o600));
 
     let devices = input::enumerate_devices();
+    daemon.keyboards.store(devices.len(), Ordering::SeqCst);
     if devices.is_empty() {
         log_line("未找到任何键盘设备，请检查权限（可能需要 input 组）。");
     }
@@ -725,9 +849,13 @@ pub fn run(ready_fd: RawFd) -> Result<(), String> {
                         continue;
                     }
                     match event.value {
-                        1 => daemon.handle_key_down(event.code),
-                        0 => daemon.handle_key_up(event.code),
-                        _ => {} // 2 = 自动重复
+                        1 if !daemon.capture_event(event.code, true) => {
+                            daemon.handle_key_down(event.code);
+                        }
+                        0 if !daemon.capture_event(event.code, false) => {
+                            daemon.handle_key_up(event.code);
+                        }
+                        _ => {} // 2 = 自动重复，或已被捕获逻辑消费
                     }
                 }
                 Ok(None) => break,
@@ -751,7 +879,12 @@ pub fn run(ready_fd: RawFd) -> Result<(), String> {
     while !STOP.load(Ordering::SeqCst) {
         loop {
             match listener.accept() {
-                Ok((stream, _)) => daemon.serve_client(stream),
+                Ok((stream, _)) => {
+                    // 每个请求单独处理：capture 可能等待用户按键数十秒，
+                    // 不能阻塞 accept 循环（否则 stop/monitor 都会停摆）。
+                    let daemon = daemon.clone();
+                    thread::spawn(move || daemon.serve_client(stream));
+                }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(err) => {
                     log_line(&format!("socket 接受连接失败: {err}"));
@@ -907,5 +1040,67 @@ mod tests {
         daemon.handle_key_up(30);
         assert!(!daemon.state.lock().unwrap().bindings[0].fired);
         daemon.handle_key_up(29);
+    }
+
+    #[test]
+    fn capture_returns_pressed_combination() {
+        let daemon = Daemon::new(Config::default());
+        daemon.keyboards.store(1, Ordering::SeqCst);
+
+        let worker = daemon.clone();
+        let handle = thread::spawn(move || worker.capture_with_timeout(Duration::from_secs(2)));
+
+        // 等待捕获会话建立后再送入按键事件。
+        for _ in 0..100 {
+            if daemon.capture.lock().unwrap().active {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(daemon.capture.lock().unwrap().active);
+
+        assert!(daemon.capture_event(29, true));
+        assert!(daemon.capture_event(56, true));
+        assert!(daemon.capture_event(45, true));
+        assert!(daemon.capture_event(45, false));
+        assert!(daemon.capture_event(56, false));
+        assert!(daemon.capture_event(29, false));
+
+        let response = handle.join().unwrap();
+        assert!(response.is_ok());
+        assert_eq!(response.keys, vec!["KEY_LEFTCTRL", "KEY_LEFTALT", "KEY_X"]);
+    }
+
+    #[test]
+    fn capture_ignores_events_when_not_active() {
+        let daemon = Daemon::new(Config::default());
+        assert!(!daemon.capture_event(29, true));
+    }
+
+    #[test]
+    fn capture_timeout_resets_monitoring_state() {
+        let daemon = Daemon::new(Config::default());
+        daemon.keyboards.store(1, Ordering::SeqCst);
+
+        let response = daemon.capture_with_timeout(Duration::from_millis(50));
+        assert!(!response.is_ok());
+        assert!(response
+            .msg
+            .as_deref()
+            .unwrap_or_default()
+            .contains("等待按键超时"));
+        assert!(!daemon.state.lock().unwrap().capturing);
+    }
+
+    #[test]
+    fn capture_without_keyboards_fails_fast() {
+        let daemon = Daemon::new(Config::default());
+        let response = daemon.capture_with_timeout(Duration::from_secs(5));
+        assert!(!response.is_ok());
+        assert!(response
+            .msg
+            .as_deref()
+            .unwrap_or_default()
+            .contains("没有可用的键盘设备"));
     }
 }

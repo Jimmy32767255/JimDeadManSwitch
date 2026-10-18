@@ -47,6 +47,9 @@ pub struct Response {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub msg: Option<String>,
+    /// 捕获到的按键名称，仅 `capture` 请求使用。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<String>,
 }
 
 impl Response {
@@ -54,6 +57,7 @@ impl Response {
         Self {
             status: "ok".to_string(),
             msg: None,
+            keys: Vec::new(),
         }
     }
 
@@ -61,6 +65,15 @@ impl Response {
         Self {
             status: "ok".to_string(),
             msg: Some(msg.into()),
+            keys: Vec::new(),
+        }
+    }
+
+    pub fn ok_with_keys(keys: Vec<String>) -> Self {
+        Self {
+            status: "ok".to_string(),
+            msg: None,
+            keys,
         }
     }
 
@@ -68,6 +81,7 @@ impl Response {
         Self {
             status: "error".to_string(),
             msg: Some(msg.into()),
+            keys: Vec::new(),
         }
     }
 
@@ -115,5 +129,15 @@ mod tests {
             serde_json::to_value(Response::error("boom")).unwrap(),
             serde_json::json!({ "status": "error", "msg": "boom" })
         );
+    }
+
+    #[test]
+    fn response_with_keys_round_trips() {
+        let response =
+            Response::ok_with_keys(vec!["KEY_LEFTCTRL".to_string(), "KEY_X".to_string()]);
+        let json = serde_json::to_string(&response).unwrap();
+        let back: Response = serde_json::from_str(&json).unwrap();
+        assert!(back.is_ok());
+        assert_eq!(back.keys, vec!["KEY_LEFTCTRL", "KEY_X"]);
     }
 }

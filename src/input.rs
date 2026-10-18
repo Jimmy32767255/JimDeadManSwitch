@@ -2,11 +2,13 @@
 //!
 //! 这里直接使用 `libc` 的 `ioctl`/`read`，不依赖额外的 evdev crate。
 
+use std::collections::BTreeSet;
 use std::ffi::CStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 pub const EV_KEY: u16 = 0x01;
 
@@ -153,6 +155,147 @@ pub fn read_event(file: &mut File) -> io::Result<Option<libc::input_event>> {
     }
 }
 
+/// 捕获组合键时的状态：记录当前按下的键，以及同时按下数量最多的一组键。
+#[derive(Debug, Clone, Default)]
+pub struct CaptureState {
+    pressed: BTreeSet<u16>,
+    peak: BTreeSet<u16>,
+    finished: bool,
+}
+
+impl CaptureState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 按下按键。自动重复不会改变状态。
+    pub fn press(&mut self, code: u16) {
+        if self.pressed.insert(code) && self.pressed.len() > self.peak.len() {
+            self.peak = self.pressed.clone();
+        }
+    }
+
+    /// 松开按键；所有键都松开后捕获完成。
+    pub fn release(&mut self, code: u16) {
+        self.pressed.remove(&code);
+        if self.pressed.is_empty() && !self.peak.is_empty() {
+            self.finished = true;
+        }
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.finished
+    }
+
+    /// 捕获到的组合，修饰键在前，其余按键码升序。
+    pub fn peak_codes(&self) -> Vec<u16> {
+        let mut codes: Vec<u16> = self.peak.iter().copied().collect();
+        codes.sort_by_key(|code| (shortcut_rank(*code), *code));
+        codes
+    }
+}
+
+/// 组合键展示顺序：Ctrl、Alt、Shift、Super，其他键在后。
+fn shortcut_rank(code: u16) -> u8 {
+    match code {
+        29 | 97 => 0,   // KEY_LEFTCTRL / KEY_RIGHTCTRL
+        56 | 100 => 1,  // KEY_LEFTALT / KEY_RIGHTALT
+        42 | 54 => 2,   // KEY_LEFTSHIFT / KEY_RIGHTSHIFT
+        125 | 126 => 3, // KEY_LEFTMETA / KEY_RIGHTMETA
+        _ => 4,
+    }
+}
+
+/// 在没有守护进程运行时直接监听键盘，等待用户按下并松开一组组合键。
+pub fn capture_keys(timeout: Duration) -> Result<Vec<u16>, String> {
+    let mut devices = enumerate_devices();
+    if devices.is_empty() {
+        return Err(
+            "未找到可用的键盘设备，请检查 /dev/input 读取权限（通常需要加入 input 组）。"
+                .to_string(),
+        );
+    }
+
+    let mut poll_fds: Vec<libc::pollfd> = devices
+        .iter()
+        .map(|device| libc::pollfd {
+            fd: device.file.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        })
+        .collect();
+
+    let mut capture = CaptureState::new();
+    let deadline = Instant::now() + timeout;
+
+    while !capture.is_finished() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let timeout_ms = remaining.as_millis().clamp(1, 100) as libc::c_int;
+
+        let ready = unsafe {
+            libc::poll(
+                poll_fds.as_mut_ptr(),
+                poll_fds.len() as libc::nfds_t,
+                timeout_ms,
+            )
+        };
+        if ready < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(format!("等待键盘输入失败: {err}"));
+        }
+        if ready == 0 {
+            continue;
+        }
+
+        for index in 0..poll_fds.len() {
+            if poll_fds[index].fd < 0 {
+                continue;
+            }
+            if poll_fds[index].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                poll_fds[index].fd = -1;
+                continue;
+            }
+            if poll_fds[index].revents & libc::POLLIN == 0 {
+                continue;
+            }
+            match read_event(&mut devices[index].file) {
+                Ok(Some(event)) => {
+                    if event.type_ != EV_KEY {
+                        continue;
+                    }
+                    match event.value {
+                        1 => capture.press(event.code),
+                        0 => capture.release(event.code),
+                        _ => {}
+                    }
+                }
+                Ok(None) => poll_fds[index].fd = -1,
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => {}
+                Err(_) => poll_fds[index].fd = -1,
+            }
+            if capture.is_finished() {
+                break;
+            }
+        }
+    }
+
+    let codes = capture.peak_codes();
+    if codes.is_empty() {
+        Err(format!(
+            "等待按键超时（{} 秒），未捕获到任何按键。",
+            timeout.as_secs()
+        ))
+    } else {
+        Ok(codes)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +311,41 @@ mod tests {
         // 64 位 Linux 上 input_event 为 16 字节 timeval + 8 字节负载。
         #[cfg(target_pointer_width = "64")]
         assert_eq!(std::mem::size_of::<libc::input_event>(), 24);
+    }
+
+    #[test]
+    fn capture_state_records_largest_simultaneous_set() {
+        let mut capture = CaptureState::new();
+        capture.press(29); // left ctrl
+        capture.press(56); // left alt
+        capture.press(45); // x
+        assert_eq!(capture.peak_codes(), vec![29, 56, 45]);
+        assert!(!capture.is_finished());
+
+        capture.release(45);
+        capture.release(56);
+        assert!(!capture.is_finished());
+        capture.release(29);
+        assert!(capture.is_finished());
+        assert_eq!(capture.peak_codes(), vec![29, 56, 45]);
+    }
+
+    #[test]
+    fn capture_state_finishes_on_single_key() {
+        let mut capture = CaptureState::new();
+        capture.press(30);
+        capture.press(30); // 自动重复
+        capture.release(30);
+        assert!(capture.is_finished());
+        assert_eq!(capture.peak_codes(), vec![30]);
+    }
+
+    #[test]
+    fn capture_state_does_not_merge_sequential_keys() {
+        let mut capture = CaptureState::new();
+        capture.press(29);
+        capture.release(29);
+        assert!(capture.is_finished());
+        assert_eq!(capture.peak_codes(), vec![29]);
     }
 }

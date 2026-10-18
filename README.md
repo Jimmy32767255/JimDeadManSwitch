@@ -9,6 +9,7 @@ GNU/Linux 平台的死手系统，用于监控特定条件（按键超时、按�
 - **按键保持规则 (`-K`)**：释放特定按键时触发命令
 - **进程监控规则 (`-p`)**：指定进程不存在时触发命令
 - **按键绑定**：用组合键预位、解除预位或触发某条规则
+- **组合键捕获**：`bind -c/--capture` 直接监听键盘，把实际按下的组合键保存为绑定
 - **守护进程模式**：后台运行并监控所有规则
 - **干运行模式**：安全测试规则触发，命令只记录不执行
 - **启动自动解除预位**：系统启动后首次运行守护进程时自动解除预位，避免关机/重启循环
@@ -54,7 +55,7 @@ makepkg -si
 
 1. 更新 [Cargo.toml](Cargo.toml) 与 [aur/PKGBUILD](aur/PKGBUILD) 中的版本号；
 2. 提交并推送所有改动（tag 必须包含 `LICENSE`，否则打包会失败）；
-3. `git tag -a v1.1.0 -m "dmsw 1.1.0" && git push origin v1.1.0`；
+3. `git tag -a v1.2.0 -m "dmsw 1.2.0" && git push origin v1.2.0`；
 4. `cd aur && makepkg --printsrcinfo > .SRCINFO`。
 
 提交 AUR 时，将 `aur/` 下的 `PKGBUILD` 与 `.SRCINFO` 推送至 AUR 的 `dmsw` 仓库即可。
@@ -186,6 +187,7 @@ dmsw del <规则名>
 dmsw arm
 dmsw unarm
 dmsw bind <动作|规则名> <按键组合>
+dmsw bind [--capture|-c] <动作|规则名>
 dmsw trigger <规则名> [--dry-run]
 dmsw daemon --start [--dry-run]
 dmsw daemon --stop
@@ -249,6 +251,31 @@ dmsw bind ctrl+alt+t rule1
 
 组合键使用 `+` 分隔。绑定按“当前按下的键集合包含组合键”匹配：例如绑定
 `ctrl+alt+x` 后，同时按住 Ctrl、Alt、X 即可触发；组合键未释放前不会重复触发。
+
+#### 捕获组合键 (`-c` / `--capture`)
+
+不想手动查按键名时，可以让 dmsw 监听键盘，把实际按下的组合键保存为绑定：
+
+```bash
+# 监听键盘，按下的组合键绑定到规则 rule1
+dmsw bind --capture rule1
+dmsw bind -c unarm
+
+# 输出示例：
+# 请按下要绑定的组合键（按住修饰键，全部松开后结束）…
+# 绑定已添加: KEY_LEFTCTRL+KEY_LEFTALT+KEY_T -> trigger rule1
+```
+
+使用说明：
+
+- 按住所有修饰键（Ctrl/Alt/Shift/Super），再按主键；**全部松开**后捕获结束。
+- 捕获会记录“同时按下数量最多”的那一组键，短暂误触不会拼接出多余组合。
+- 守护进程运行时，捕获请求交给守护进程处理，这样可以避免与守护进程争抢
+  `/dev/input` 设备；捕获期间规则监控暂停，结束后重新计时，不会因捕获过程误触发。
+- 守护进程未运行时，`bind -c` 会直接独占键盘监听（需要读取 `/dev/input/event*`
+  的权限）。
+- 守护进程侧等待上限为 20 秒，直接监听上限为 15 秒；超时则不会保存绑定。
+- 捕获只负责得到组合键，绑定动作（`arm`/`unarm`/规则名）与普通 `bind` 相同。
 
 ### 预设命令
 
@@ -375,6 +402,8 @@ Rust 版保持了原有 CLI、配置结构、socket 协议和预设命令，同�
 - **systemd 单元**：提供用户级单元与系统级模板单元，便于开机自启。
 - **启动时自动解除预位**：通过内核 boot ID 判断是否发生了系统启动/重启，避免
   关机或重启规则在开机后再次触发形成循环。
+- **新增组合键捕获**：`bind -c/--capture` 可直接监听键盘，把实际按下的组合键
+  保存为绑定，不必手动输入按键名。
 
 原 Python 实现保留在 git 历史中。
 
