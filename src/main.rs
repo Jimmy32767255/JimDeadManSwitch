@@ -37,20 +37,7 @@ const HELP: &str = "\
                可用于 daemon --start 或 trigger
     -c, --capture  bind：监听键盘，捕获要绑定的组合键
 
-示例:
-    dmsw new rule1 -k 30s space o
-    dmsw new rule2 -K leftctrl c
-    dmsw new rule3 -p firefox r
-    dmsw bind ctrl+alt+x rule1
-    dmsw bind ctrl+alt+u unarm
-    dmsw bind --capture rule1
-    dmsw bind -c unarm
-    dmsw daemon --start --dry-run
-    dmsw trigger rule1 --dry-run
-    dmsw arm
-
 按键名: space、leftctrl、KEY_A、a 等；加 --id 后使用数字键码。
-预设命令: d、s、o、O、r、R、c（见 README）。
 bind 的 -c/--capture 会监听键盘，把实际按下的组合键保存为绑定。";
 
 fn main() {
@@ -366,7 +353,7 @@ fn cmd_trigger(args: &[String], dry_run: bool) -> Result<(), String> {
                 .rules
                 .get(name)
                 .ok_or_else(|| format!("规则 '{name}' 不存在"))?;
-            let command = config::resolve_command(rule.command());
+            let command = rule.command();
             eprintln!("提示：{err}");
             println!("[干运行] 规则 '{name}' 将执行命令: {command}");
             Ok(())

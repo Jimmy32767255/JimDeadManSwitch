@@ -9,7 +9,7 @@
 # 提交到 AUR 时，将本目录下的 PKGBUILD 与 .SRCINFO 推送到 AUR 仓库即可。
 
 pkgname=dmsw
-pkgver=1.2.0
+pkgver=2.0.0
 pkgrel=1
 pkgdesc="GNU/Linux dead man's switch: run commands on key timeouts, key releases, or missing processes"
 arch=('x86_64' 'aarch64' 'armv7h')

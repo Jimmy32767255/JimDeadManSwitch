@@ -1,7 +1,7 @@
 # dmsw - 死手系统 (Dead Man's Switch)
 
 GNU/Linux 平台的死手系统，用于监控特定条件（按键超时、按键释放、进程存活），
-并在条件被打破时执行预设命令。本项目是原 Python 版本的完整 Rust 重写。
+并在条件被打破时执行指定命令。
 
 ## 功能特性
 
@@ -13,7 +13,6 @@ GNU/Linux 平台的死手系统，用于监控特定条件（按键超时、按�
 - **守护进程模式**：后台运行并监控所有规则
 - **干运行模式**：安全测试规则触发，命令只记录不执行
 - **启动自动解除预位**：系统启动后首次运行守护进程时自动解除预位，避免关机/重启循环
-- **纯 Rust 实现**：只依赖 `libc`、`serde`、`serde_json`，无需 Python 运行时
 
 ## 系统要求
 
@@ -55,7 +54,7 @@ makepkg -si
 
 1. 更新 [Cargo.toml](Cargo.toml) 与 [aur/PKGBUILD](aur/PKGBUILD) 中的版本号；
 2. 提交并推送所有改动（tag 必须包含 `LICENSE`，否则打包会失败）；
-3. `git tag -a v1.2.0 -m "dmsw 1.2.0" && git push origin v1.2.0`；
+3. `git tag -a v2.0.0 -m "dmsw 2.0.0" && git push origin v2.0.0`；
 4. `cd aur && makepkg --printsrcinfo > .SRCINFO`。
 
 提交 AUR 时，将 `aur/` 下的 `PKGBUILD` 与 `.SRCINFO` 推送至 AUR 的 `dmsw` 仓库即可。
@@ -78,7 +77,7 @@ sudo dmsw daemon --start
 
 ```bash
 # 1. 创建规则：30 秒内未按空格键则关机
-dmsw new rule1 -k 30s space o
+dmsw new rule1 -k 30s space "systemctl poweroff"
 
 # 2. 启动守护进程
 dmsw daemon --start
@@ -169,7 +168,7 @@ tail -f ~/.config/dmsw/dmsw.log
 dmsw trigger rule1 --dry-run
 ```
 
-日志中会出现 `[干运行] 将执行命令: ...`，预设缩写会展开为完整命令。
+日志中会出现 `[干运行] 将执行命令: ...`。
 `--dry-run` 可以写在子命令前后，例如 `dmsw --dry-run trigger rule1`。
 
 注意：
@@ -277,23 +276,6 @@ dmsw bind -c unarm
 - 守护进程侧等待上限为 20 秒，直接监听上限为 15 秒；超时则不会保存绑定。
 - 捕获只负责得到组合键，绑定动作（`arm`/`unarm`/规则名）与普通 `bind` 相同。
 
-### 预设命令
-
-| 缩写 | 实际命令 |
-|------|----------|
-| `d` | `rm -rf /home/$USER/.safebox` |
-| `s` | `bleachbit -s /home/$USER/.safebox` |
-| `o` | `systemctl poweroff` |
-| `O` | `sysrq -o` |
-| `r` | `systemctl reboot` |
-| `R` | `sysrq -b` |
-| `c` | `sysrq -c` |
-
-```bash
-# 30 秒未按空格则关机
-dmsw new rule1 -k 30s space o
-```
-
 命令通过 `sh -c` 执行，工作目录为守护进程启动时的目录，输出被丢弃。
 
 ### 按键名称
@@ -324,12 +306,12 @@ dmsw new rule1 -k 30s space o
       "type": "key_hold",
       "key": "leftctrl",
       "key_id": false,
-      "command": "o"
+      "command": "systemctl poweroff"
     },
     "rule3": {
       "type": "process",
       "process_name": "firefox",
-      "command": "r"
+      "command": "systemctl reboot"
     }
   },
   "bindings": [
@@ -378,34 +360,8 @@ dmsw new rule1 -k 30s space o
 2. `dmsw daemon --start` 启动后台监控（新系统启动时会自动解除预位）
 3. `dmsw arm` 预位，规则开始生效
 4. 守护进程每 0.5 秒检查超时与进程规则，并实时处理键盘事件
-5. 条件满足时执行预设命令
+5. 条件满足时执行规则命令
 6. `dmsw unarm` 解除预位，`dmsw daemon --stop` 停止守护进程
-
-## 与 Python 原版的差异
-
-Rust 版保持了原有 CLI、配置结构、socket 协议和预设命令，同时修复了原版的
-若干问题：
-
-- **按键绑定现在能真正触发**：原版把字符串键名与整数键码直接比较，绑定永远
-  不匹配；现在会把绑定解析为键码集合并做子集匹配。
-- **组合键不会重复触发**：按住不放或自动重复只触发一次，组合键被打破后重置。
-- **进程规则改为边沿触发**：原版在进程缺失期间每 0.5 秒重复执行命令；现在只在
-  “存在 → 缺失”时触发一次。
-- **守护进程未运行时不再报错退出**：`new`/`del`/`bind`/`arm`/`unarm` 会先保存
-  配置，仅提示守护进程未运行。
-- **更严格的权限**：配置目录 0700、配置文件 0600、socket 与 PID 文件 0600。
-- **更安全的启动**：子进程回收避免僵尸进程；启动握手让失败可见。
-- **无 Python 依赖**：用 `/proc` 扫描代替 psutil，用 libc ioctl 代替 evdev。
-- **新增干运行模式**：`--dry-run` 可让守护进程或单次 `trigger` 只报告将要执行的
-  命令，用于安全测试规则。
-- **参数兼容**：`bind` 同时接受“动作在前”和“按键组合在前”两种写法。
-- **systemd 单元**：提供用户级单元与系统级模板单元，便于开机自启。
-- **启动时自动解除预位**：通过内核 boot ID 判断是否发生了系统启动/重启，避免
-  关机或重启规则在开机后再次触发形成循环。
-- **新增组合键捕获**：`bind -c/--capture` 可直接监听键盘，把实际按下的组合键
-  保存为绑定，不必手动输入按键名。
-
-原 Python 实现保留在 git 历史中。
 
 ## 注意事项与免责声明
 

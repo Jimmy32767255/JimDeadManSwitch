@@ -217,7 +217,7 @@ impl Daemon {
             .config
             .rules
             .get(name)
-            .map(|rule| config::resolve_command(rule.command()).to_string())
+            .map(|rule| rule.command().to_string())
     }
 
     fn trigger(&self, name: &str, dry_run: bool) -> Result<String, String> {
@@ -292,7 +292,7 @@ impl Daemon {
                                 .config
                                 .rules
                                 .get(&rule)
-                                .map(|rule| config::resolve_command(rule.command()).to_string())
+                                .map(|rule| rule.command().to_string())
                             {
                                 commands.push(command);
                             } else {
@@ -327,7 +327,7 @@ impl Daemon {
                         .config
                         .rules
                         .get(name)
-                        .map(|rule| config::resolve_command(rule.command()).to_string())
+                        .map(|rule| rule.command().to_string())
                     {
                         log_line(&format!("按键保持规则 '{name}' 触发"));
                         commands.push(command);
@@ -624,7 +624,7 @@ fn compile(
                         key: code,
                         interval: Duration::from_secs_f64(*interval),
                     },
-                    command: config::resolve_command(command).to_string(),
+                    command: command.clone(),
                 });
             }
             Rule::KeyHold {
@@ -643,7 +643,7 @@ fn compile(
                 rules.push(CompiledRule {
                     name: name.clone(),
                     kind: RuleKind::KeyHold,
-                    command: config::resolve_command(command).to_string(),
+                    command: command.clone(),
                 });
             }
             Rule::Process {
@@ -659,7 +659,7 @@ fn compile(
                     kind: RuleKind::Process {
                         process: process_name.clone(),
                     },
-                    command: config::resolve_command(command).to_string(),
+                    command: command.clone(),
                 });
             }
         }
@@ -736,7 +736,6 @@ fn is_process_running(name: &str) -> bool {
 }
 
 fn execute_command(command: &str, force_dry_run: bool) {
-    let command = config::resolve_command(command);
     if force_dry_run || is_dry_run() {
         log_line(&format!("[干运行] 将执行命令: {command}"));
         return;
@@ -949,7 +948,7 @@ mod tests {
                 interval: 30.0,
                 key: "space".to_string(),
                 key_id: false,
-                command: "o".to_string(),
+                command: "systemctl poweroff".to_string(),
             },
         );
         config.rules.insert(
@@ -957,14 +956,14 @@ mod tests {
             Rule::KeyHold {
                 key: "leftctrl".to_string(),
                 key_id: false,
-                command: "c".to_string(),
+                command: "sysrq -c".to_string(),
             },
         );
         config.rules.insert(
             "missing".to_string(),
             Rule::Process {
                 process_name: "firefox".to_string(),
-                command: "r".to_string(),
+                command: "systemctl reboot".to_string(),
             },
         );
         config.bindings.push(Binding {
@@ -1000,7 +999,7 @@ mod tests {
             "poweroff".to_string(),
             Rule::Process {
                 process_name: "definitely-not-running".to_string(),
-                command: "o".to_string(),
+                command: "systemctl poweroff".to_string(),
             },
         );
         let daemon = Daemon::new(config);

@@ -14,27 +14,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub const VERSION: &str = "1.2.0";
-
-/// 预定义命令缩写。
-pub const PRESET_COMMANDS: &[(&str, &str)] = &[
-    ("d", "rm -rf /home/$USER/.safebox"),
-    ("s", "bleachbit -s /home/$USER/.safebox"),
-    ("o", "systemctl poweroff"),
-    ("O", "sysrq -o"),
-    ("r", "systemctl reboot"),
-    ("R", "sysrq -b"),
-    ("c", "sysrq -c"),
-];
-
-/// 若命令是预设缩写则展开，否则原样返回。
-pub fn resolve_command(command: &str) -> &str {
-    PRESET_COMMANDS
-        .iter()
-        .find(|(short, _)| *short == command)
-        .map(|(_, full)| *full)
-        .unwrap_or(command)
-}
+pub const VERSION: &str = "2.0.0";
 
 /// 一条监控规则。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -439,13 +419,6 @@ mod tests {
         );
         assert!(parse_key_combination("ctrl++a").is_err());
         assert!(parse_key_combination("").is_err());
-    }
-
-    #[test]
-    fn presets_are_resolved() {
-        assert_eq!(resolve_command("o"), "systemctl poweroff");
-        assert_eq!(resolve_command("O"), "sysrq -o");
-        assert_eq!(resolve_command("echo hi"), "echo hi");
     }
 
     #[test]

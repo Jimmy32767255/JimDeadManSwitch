@@ -1,6 +1,6 @@
 pkgbase = dmsw
 	pkgdesc = GNU/Linux dead man's switch: run commands on key timeouts, key releases, or missing processes
-	pkgver = 1.2.0
+	pkgver = 2.0.0
 	pkgrel = 1
 	url = https://github.com/Jimmy32767255/JimDeadManSwitch
 	arch = x86_64
@@ -10,7 +10,7 @@ pkgbase = dmsw
 	makedepends = cargo
 	makedepends = git
 	depends = gcc-libs
-	source = dmsw::git+https://github.com/Jimmy32767255/JimDeadManSwitch.git#tag=v1.2.0
+	source = dmsw::git+https://github.com/Jimmy32767255/JimDeadManSwitch.git#tag=v2.0.0
 	sha256sums = SKIP
 
 pkgname = dmsw
