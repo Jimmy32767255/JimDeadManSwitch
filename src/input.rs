@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 pub const EV_KEY: u16 = 0x01;
 
 const IOC_READ: u32 = 2;
-const IOC_WRITE: u32 = 1;
 
 /// Linux `_IOC` 编码。
 const fn ioc(dir: u32, ty: u8, nr: u8, size: usize) -> libc::c_ulong {
@@ -29,10 +28,6 @@ const fn eviocgbit(ev: u8, size: usize) -> libc::c_ulong {
     ioc(IOC_READ, b'E', 0x20 + ev, size)
 }
 
-const fn eviocgrab() -> libc::c_ulong {
-    ioc(IOC_WRITE, b'E', 0x90, std::mem::size_of::<libc::c_int>())
-}
-
 /// 已打开的键盘设备。
 pub struct Device {
     pub file: File,
@@ -40,7 +35,10 @@ pub struct Device {
     pub name: String,
 }
 
-/// 枚举并打开所有键盘类输入设备。
+/// 枚举并以只读方式打开所有键盘类输入设备。
+///
+/// 不调用 `EVIOCGRAB`：守护进程只旁路读取按键，不能独占设备，否则其他程序
+/// 将收不到键盘输入。
 pub fn enumerate_devices() -> Vec<Device> {
     let mut paths: Vec<PathBuf> = Vec::new();
     if let Ok(entries) = fs::read_dir("/dev/input") {
@@ -83,16 +81,6 @@ fn open_device(path: &Path) -> Result<Option<Device>, String> {
     let lower_name = name.to_ascii_lowercase();
     if !lower_name.contains("key") {
         return Ok(None);
-    }
-
-    let grab: libc::c_int = 1;
-    let result = unsafe { libc::ioctl(fd, eviocgrab(), &grab as *const libc::c_int) };
-    if result < 0 {
-        eprintln!(
-            "警告：无法独占设备 {}（{}），可能有其他程序占用。",
-            path.display(),
-            io::Error::last_os_error()
-        );
     }
 
     Ok(Some(Device {
@@ -303,7 +291,6 @@ mod tests {
     #[test]
     fn ioctl_numbers_match_kernel_uapi() {
         assert_eq!(eviocgname(256), 0x8100_4506);
-        assert_eq!(eviocgrab(), 0x4004_4590);
     }
 
     #[test]
