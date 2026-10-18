@@ -1,0 +1,17 @@
+[package]
+name = "dmsw"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.70"
+description = "Dead Man's Switch for GNU/Linux"
+license = "MIT"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
