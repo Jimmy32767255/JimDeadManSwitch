@@ -19,6 +19,18 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// 收到 SIGINT/SIGTERM 后置位，主循环据此退出。
 pub static STOP: AtomicBool = AtomicBool::new(false);
 
+/// 干运行模式：所有命令只写入日志，不真正执行。
+static DRY_RUN: AtomicBool = AtomicBool::new(false);
+
+/// 设置干运行模式，需在守护进程开始处理事件前调用。
+pub fn set_dry_run(enabled: bool) {
+    DRY_RUN.store(enabled, Ordering::SeqCst);
+}
+
+pub fn is_dry_run() -> bool {
+    DRY_RUN.load(Ordering::SeqCst)
+}
+
 const MONITOR_INTERVAL: Duration = Duration::from_millis(500);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
@@ -184,11 +196,11 @@ impl Daemon {
             .map(|rule| config::resolve_command(rule.command()).to_string())
     }
 
-    fn trigger(&self, name: &str) -> Result<(), String> {
+    fn trigger(&self, name: &str, dry_run: bool) -> Result<String, String> {
         match self.command_for_rule(name) {
             Some(command) => {
-                execute_command(&command);
-                Ok(())
+                execute_command(&command, dry_run);
+                Ok(command)
             }
             None => Err(format!("规则 '{name}' 不存在")),
         }
@@ -269,7 +281,7 @@ impl Daemon {
         }
 
         for command in commands {
-            execute_command(&command);
+            execute_command(&command, false);
         }
         if needs_save {
             if let Err(err) = self.save() {
@@ -309,7 +321,7 @@ impl Daemon {
         }
 
         for command in commands {
-            execute_command(&command);
+            execute_command(&command, false);
         }
     }
 
@@ -372,7 +384,7 @@ impl Daemon {
         }
 
         for command in commands {
-            execute_command(&command);
+            execute_command(&command, false);
         }
     }
 
@@ -405,8 +417,16 @@ impl Daemon {
                 Err(err) => Response::error(err),
             },
             "trigger" => match &request.rule {
-                Some(rule) => match self.trigger(rule) {
-                    Ok(()) => Response::ok(),
+                Some(rule) => match self.trigger(rule, request.dry_run) {
+                    Ok(command) => {
+                        if request.dry_run || is_dry_run() {
+                            Response::ok_with_message(format!(
+                                "[干运行] 规则 '{rule}' 将执行命令: {command}"
+                            ))
+                        } else {
+                            Response::ok()
+                        }
+                    }
                     Err(err) => Response::error(err),
                 },
                 None => Response::error("缺少规则名"),
@@ -592,8 +612,12 @@ fn is_process_running(name: &str) -> bool {
     false
 }
 
-fn execute_command(command: &str) {
+fn execute_command(command: &str, force_dry_run: bool) {
     let command = config::resolve_command(command);
+    if force_dry_run || is_dry_run() {
+        log_line(&format!("[干运行] 将执行命令: {command}"));
+        return;
+    }
     log_line(&format!("执行命令: {command}"));
 
     match Command::new("sh")
@@ -684,7 +708,12 @@ pub fn run(ready_fd: RawFd) -> Result<(), String> {
         });
     }
 
-    log_line(&format!("守护进程已启动，监听 {socket_path}"));
+    if is_dry_run() {
+        log_line(&format!("守护进程已启动（干运行模式），监听 {socket_path}"));
+        log_line("干运行：所有规则照常评估，但命令只会记录，不会执行。");
+    } else {
+        log_line(&format!("守护进程已启动，监听 {socket_path}"));
+    }
     let _ = write_ready(ready_fd);
 
     let mut last_monitor = Instant::now();
@@ -790,6 +819,36 @@ mod tests {
         let timeout = rules.iter().find(|rule| rule.name == "timeout").unwrap();
         assert_eq!(timeout.command, "systemctl poweroff");
         assert!(matches!(timeout.kind, RuleKind::KeyTimeout { key: 57, .. }));
+    }
+
+    #[test]
+    fn dry_run_does_not_execute_commands() {
+        let path = std::env::temp_dir().join(format!("dmsw-dry-run-{}", std::process::id()));
+        let _ = fs::remove_file(&path);
+        execute_command(&format!("touch {}", path.display()), true);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn dry_run_trigger_reports_command_without_executing() {
+        let mut config = Config::default();
+        config.rules.insert(
+            "poweroff".to_string(),
+            Rule::Process {
+                process_name: "definitely-not-running".to_string(),
+                command: "o".to_string(),
+            },
+        );
+        let daemon = Daemon::new(config);
+
+        let response =
+            daemon.handle_request(&Request::with_rule("trigger", "poweroff").dry_run(true));
+        assert!(response.is_ok());
+        assert!(response
+            .msg
+            .as_deref()
+            .unwrap_or_default()
+            .contains("systemctl poweroff"));
     }
 
     #[test]

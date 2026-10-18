@@ -14,7 +14,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub const VERSION: &str = "1.0.0";
+pub const VERSION: &str = "1.1.0";
 
 /// 预定义命令缩写。
 pub const PRESET_COMMANDS: &[(&str, &str)] = &[

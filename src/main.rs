@@ -32,23 +32,44 @@ const HELP: &str = "\
     -K [--id] <按键> <命令>          按键保持：释放该键时执行命令
     -p <进程名> <命令>               进程监控：进程不存在时执行命令
 
+选项:
+    --dry-run  干运行：规则照常评估，但命令只记录/显示，不真正执行
+               可用于 daemon --start 或 trigger
+
 示例:
     dmsw new rule1 -k 30s space o
     dmsw new rule2 -K leftctrl c
     dmsw new rule3 -p firefox r
     dmsw bind ctrl+alt+x rule1
     dmsw bind ctrl+alt+u unarm
-    dmsw daemon --start
+    dmsw daemon --start --dry-run
+    dmsw trigger rule1 --dry-run
     dmsw arm
 
 按键名: space、leftctrl、KEY_A、a 等；加 --id 后使用数字键码。
 预设命令: d、s、o、O、r、R、c（见 README）。";
 
 fn main() {
-    let args: Vec<String> = env::args().skip(1).collect();
+    let raw_args: Vec<String> = env::args().skip(1).collect();
+    // --dry-run 是全局开关，可写在子命令前后；只对 daemon/trigger 有意义。
+    let dry_run = raw_args.iter().any(|arg| arg == "--dry-run");
+    let args: Vec<String> = raw_args
+        .into_iter()
+        .filter(|arg| arg != "--dry-run")
+        .collect();
 
     if args.is_empty() {
         println!("{HELP}");
+        process::exit(1);
+    }
+
+    if dry_run
+        && !matches!(
+            args[0].as_str(),
+            "daemon" | "trigger" | "-v" | "--version" | "-h" | "--help"
+        )
+    {
+        eprintln!("--dry-run 只能用于 dmsw daemon --start 或 dmsw trigger <规则名>。");
         process::exit(1);
     }
 
@@ -66,8 +87,8 @@ fn main() {
         "arm" => cmd_arm(),
         "unarm" => cmd_unarm(),
         "bind" => cmd_bind(&args[1..]),
-        "trigger" => cmd_trigger(&args[1..]),
-        "daemon" => cmd_daemon(&args[1..]),
+        "trigger" => cmd_trigger(&args[1..], dry_run),
+        "daemon" => cmd_daemon(&args[1..], dry_run),
         other => Err(format!("未知子命令: {other}\n\n{HELP}")),
     };
 
@@ -252,24 +273,48 @@ fn cmd_bind(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_trigger(args: &[String]) -> Result<(), String> {
-    let name = args.first().ok_or("用法: dmsw trigger <规则名>")?;
-    let response = config::notify_daemon(&Request::with_rule("trigger", name))?;
+fn cmd_trigger(args: &[String], dry_run: bool) -> Result<(), String> {
+    let name = args
+        .first()
+        .ok_or("用法: dmsw trigger <规则名> [--dry-run]")?;
+    let request = Request::with_rule("trigger", name).dry_run(dry_run);
 
-    if response.is_ok() {
-        println!("规则 '{name}' 已触发。");
-        Ok(())
-    } else {
-        Err(response.msg.unwrap_or_else(|| "触发失败".to_string()))
+    match config::notify_daemon(&request) {
+        Ok(response) if response.is_ok() => {
+            match response.msg {
+                Some(message) => println!("{message}"),
+                None => println!("规则 '{name}' 已触发。"),
+            }
+            Ok(())
+        }
+        Ok(response) => Err(response.msg.unwrap_or_else(|| "触发失败".to_string())),
+        Err(err) if dry_run && err.contains("无法连接到守护进程") => {
+            // 守护进程未运行也能预览：直接读取配置并解析出最终命令。
+            let config = config::load_config()?;
+            let rule = config
+                .rules
+                .get(name)
+                .ok_or_else(|| format!("规则 '{name}' 不存在"))?;
+            let command = config::resolve_command(rule.command());
+            eprintln!("提示：{err}");
+            println!("[干运行] 规则 '{name}' 将执行命令: {command}");
+            Ok(())
+        }
+        Err(err) => Err(err),
     }
 }
 
-fn cmd_daemon(args: &[String]) -> Result<(), String> {
-    match args.first().map(String::as_str) {
-        Some("--start") => start_daemon(),
-        Some("--stop") => stop_daemon(),
+fn cmd_daemon(args: &[String], dry_run: bool) -> Result<(), String> {
+    match args {
+        [flag] if flag == "--start" => start_daemon(dry_run),
+        [flag] if flag == "--stop" => {
+            if dry_run {
+                return Err("--dry-run 不能用于 dmsw daemon --stop。".to_string());
+            }
+            stop_daemon()
+        }
         _ => Err(
-            "用法: dmsw daemon <--start|--stop>\n  --start  启动守护进程\n  --stop   停止守护进程"
+            "用法: dmsw daemon <--start|--stop> [--dry-run]\n  --start  启动守护进程\n  --stop   停止守护进程"
                 .to_string(),
         ),
     }
@@ -294,10 +339,14 @@ fn process_alive(pid: i32) -> bool {
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
-fn start_daemon() -> Result<(), String> {
+fn start_daemon(dry_run: bool) -> Result<(), String> {
     if let Some(pid) = read_pid() {
         if process_alive(pid) {
-            println!("守护进程已在运行中。");
+            if dry_run {
+                println!("守护进程已在运行中（--dry-run 只对本次新启动生效，请先停止）。");
+            } else {
+                println!("守护进程已在运行中。");
+            }
             return Ok(());
         }
         let _ = fs::remove_file(config::pid_file());
@@ -340,7 +389,11 @@ fn start_daemon() -> Result<(), String> {
         let message = String::from_utf8_lossy(&buffer[..size as usize]);
         let message = message.trim();
         if message == "ok" {
-            println!("守护进程已启动，PID: {pid}");
+            if dry_run {
+                println!("守护进程已启动（干运行模式），PID: {pid}");
+            } else {
+                println!("守护进程已启动，PID: {pid}");
+            }
             Ok(())
         } else {
             Err(message.to_string())
@@ -358,6 +411,7 @@ fn start_daemon() -> Result<(), String> {
             }
         }
         daemon::detach_stdio();
+        daemon::set_dry_run(dry_run);
 
         let code = match daemon::run(pipe_fds[1]) {
             Ok(()) => 0,

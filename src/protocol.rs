@@ -8,6 +8,13 @@ pub struct Request {
     pub command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule: Option<String>,
+    /// 请求只模拟执行命令（守护进程侧不再二次执行）。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dry_run: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Request {
@@ -15,6 +22,7 @@ impl Request {
         Self {
             command: command.into(),
             rule: None,
+            dry_run: false,
         }
     }
 
@@ -22,7 +30,14 @@ impl Request {
         Self {
             command: command.into(),
             rule: Some(rule.into()),
+            dry_run: false,
         }
+    }
+
+    /// 标记为干运行请求：守护进程只记录将要执行的命令。
+    pub fn dry_run(mut self, dry_run: bool) -> Self {
+        self.dry_run = dry_run;
+        self
     }
 }
 
@@ -39,6 +54,13 @@ impl Response {
         Self {
             status: "ok".to_string(),
             msg: None,
+        }
+    }
+
+    pub fn ok_with_message(msg: impl Into<String>) -> Self {
+        Self {
+            status: "ok".to_string(),
+            msg: Some(msg.into()),
         }
     }
 
@@ -71,6 +93,16 @@ mod tests {
         let back: Request = serde_json::from_str(&json).unwrap();
         assert_eq!(back.command, "trigger");
         assert_eq!(back.rule.as_deref(), Some("rule1"));
+        assert!(!back.dry_run);
+    }
+
+    #[test]
+    fn dry_run_request_round_trips() {
+        let request = Request::with_rule("trigger", "rule1").dry_run(true);
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["dry_run"], true);
+        let back: Request = serde_json::from_value(json).unwrap();
+        assert!(back.dry_run);
     }
 
     #[test]

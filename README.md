@@ -10,6 +10,7 @@ GNU/Linux 平台的死手系统，用于监控特定条件（按键超时、按�
 - **进程监控规则 (`-p`)**：指定进程不存在时触发命令
 - **按键绑定**：用组合键预位、解除预位或触发某条规则
 - **守护进程模式**：后台运行并监控所有规则
+- **干运行模式**：安全测试规则触发，命令只记录不执行
 - **纯 Rust 实现**：只依赖 `libc`、`serde`、`serde_json`，无需 Python 运行时
 
 ## 系统要求
@@ -71,6 +72,34 @@ dmsw unarm
 dmsw daemon --stop
 ```
 
+## 干运行模式
+
+干运行用于安全地验证规则和绑定是否会按预期触发：规则照常评估，但命令只写入
+日志或打印出来，不会真正执行。
+
+```bash
+# 若普通守护进程正在运行，先停止它
+dmsw daemon --stop
+
+# 以干运行模式启动：触发情况与真实运行一致，命令只记录
+dmsw daemon --start --dry-run
+dmsw arm
+tail -f ~/.config/dmsw/dmsw.log
+
+# 单次预览某条规则会执行什么命令（无需启动守护进程）
+dmsw trigger rule1 --dry-run
+```
+
+日志中会出现 `[干运行] 将执行命令: ...`，预设缩写会展开为完整命令。
+`--dry-run` 可以写在子命令前后，例如 `dmsw --dry-run trigger rule1`。
+
+注意：
+
+- 干运行只阻止“执行命令”；配置修改、预位状态、绑定等仍然照常生效。
+- 守护进程级别的干运行需要不带 `--dry-run` 重新启动才会恢复真实执行。
+- 只想预览单条规则时，可直接用 `dmsw trigger <规则名> --dry-run`，对正在运行的
+  普通守护进程同样安全；若要整体切换为干运行，请先 `dmsw daemon --stop`。
+
 ## 命令
 
 ```
@@ -79,8 +108,9 @@ dmsw del <规则名>
 dmsw arm
 dmsw unarm
 dmsw bind <动作|规则名> <按键组合>
-dmsw trigger <规则名>
-dmsw daemon --start|--stop
+dmsw trigger <规则名> [--dry-run]
+dmsw daemon --start [--dry-run]
+dmsw daemon --stop
 dmsw -v|--version
 dmsw -h|--help
 ```
@@ -246,6 +276,8 @@ Rust 版保持了原有 CLI、配置结构、socket 协议和预设命令，同�
 - **更严格的权限**：配置目录 0700、配置文件 0600、socket 与 PID 文件 0600。
 - **更安全的启动**：子进程回收避免僵尸进程；启动握手让失败可见。
 - **无 Python 依赖**：用 `/proc` 扫描代替 psutil，用 libc ioctl 代替 evdev。
+- **新增干运行模式**：`--dry-run` 可让守护进程或单次 `trigger` 只报告将要执行的
+  命令，用于安全测试规则。
 - **参数兼容**：`bind` 同时接受“动作在前”和“按键组合在前”两种写法。
 
 原 Python 实现保留在 git 历史中。
